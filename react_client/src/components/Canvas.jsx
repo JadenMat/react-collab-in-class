@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from "react";
+import "./Canvas.css";
 import { socket } from "../socket.js";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
-export default function Canvas({ brushColor, brushSize }) {
+export default function Canvas({
+  brushColor, setBrushColor,
+  brushSize, setBrushSize
+}) {
+
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [prevPos, setPrevPos] = useState(null);
 
-  // Setup canvas context
+  // Setup canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     canvas.width = window.innerWidth * 0.8;
@@ -16,16 +24,13 @@ export default function Canvas({ brushColor, brushSize }) {
     const ctx = canvas.getContext("2d");
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-
     ctxRef.current = ctx;
   }, []);
 
-  // Handle incoming draw events
+  // Handle socket draw updates
   useEffect(() => {
-    socket.on("draw", (data) => {
-      const { x1, y1, x2, y2, color, size } = data;
+    socket.on("draw", ({ x1, y1, x2, y2, color, size }) => {
       const ctx = ctxRef.current;
-
       ctx.strokeStyle = color;
       ctx.lineWidth = size;
 
@@ -35,7 +40,15 @@ export default function Canvas({ brushColor, brushSize }) {
       ctx.stroke();
     });
 
-    return () => socket.off("draw");
+    socket.on("clear", () => {
+      const canvas = canvasRef.current;
+      ctxRef.current.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    return () => {
+      socket.off("draw");
+      socket.off("clear");
+    };
   }, []);
 
   // Drawing handlers
@@ -59,13 +72,11 @@ export default function Canvas({ brushColor, brushSize }) {
     ctx.strokeStyle = brushColor;
     ctx.lineWidth = brushSize;
 
-    // Draw locally
     ctx.beginPath();
     ctx.moveTo(prevPos.x, prevPos.y);
     ctx.lineTo(offsetX, offsetY);
     ctx.stroke();
 
-    // Emit draw event
     socket.emit("draw", {
       x1: prevPos.x,
       y1: prevPos.y,
@@ -78,17 +89,79 @@ export default function Canvas({ brushColor, brushSize }) {
     setPrevPos({ x: offsetX, y: offsetY });
   };
 
+  const handleSavePdf = async () => {
+    const canvasImage = await html2canvas(canvasRef.current);
+    const imgData = canvasImage.toDataURL("image/png");
+
+    const pdf = new jsPDF();
+    const imgProps = pdf.getImageProperties(imgData);
+
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+    pdf.save("canvas_export.pdf");
+  };
+
+  // Reset canvas
+  const handleResetCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = ctxRef.current;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    socket.emit("clear");
+  };
+
   return (
-    <canvas
-      ref={canvasRef}
-      onMouseDown={startDrawing}
-      onMouseUp={stopDrawing}
-      onMouseLeave={stopDrawing}
-      onMouseMove={draw}
-      style={{
-        border: "1px solid #999",
-        cursor: "crosshair",
-      }}
+    <div className="canvas-container">
+      <header className="header">
+        <h1>Collaborative Drawing Board</h1>
+      </header>
+  
+      <div className="canvas-wrapper">
+        <canvas
+          ref={canvasRef}
+          onMouseDown={startDrawing}
+          onMouseUp={stopDrawing}
+          onMouseLeave={stopDrawing}
+          onMouseMove={draw}
+          className="drawing-canvas"
+        />
+      </div>
+
+      <div className="toolbar">
+  <label>
+    Brush Color:
+    <input
+      type="color"
+      value={brushColor}
+      onChange={(e) => setBrushColor(e.target.value)}
     />
-  );
+  </label>
+
+  <label>
+    Brush Size:
+    <input
+      type="range"
+      min="1"
+      max="50"
+      value={brushSize}
+      onChange={(e) => setBrushSize(Number(e.target.value))}
+    />
+    <span>{brushSize}px</span>
+  </label>
+</div>
+
+  
+      <div className="buttons">
+        <button className="pdf" onClick={handleSavePdf}>
+          Save as PDF
+        </button>
+        <button className="reset" onClick={handleResetCanvas}>
+          Reset Canvas
+        </button>
+      </div>
+    </div>
+  );  
 }
